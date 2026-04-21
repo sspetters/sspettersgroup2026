@@ -1,0 +1,67 @@
+%NOTES:
+%When you press run on this code it generates a scaled log plot for
+%Succinic acid
+
+clc; %clears command window which is where you can do small calculations
+     %off to the side
+tic; %starts the measurement on how long the code takes to run
+
+printname_this = 'Mie_curve_feb7.pdf'; %name of plot that is generated
+                                       %unused because of return placement
+outfile_this   = 'OPC-response_hr_feb7.dat'; %name of accesed file for data
+outfile_this   = 'OPC-response_hr.dat'; %name of accesed file for data
+figure(10);clf;hold on;set(gcf,'Color','w'); %creates figure 10
+                                             %clf clears any plots that
+                                             %,were on figure 10
+                                             %hold on lets plots to be
+                                             %,layered on figure 10
+                                             %gcf "gets current figure"
+                                             %'Color', 'w' sets the bg
+                                             %,color to white
+                                          
+
+
+%% Model using Mie Code
+
+% Lengths are all in nanometers
+
+% ylimits = [1 8.5];    % log10 normalized pulse height
+% xlimits = [100 20000]; % nm
+
+ylimits = [1 5];    % log10 normalized pulse height
+                    %sets the limits of the y axis
+
+xlimits = [200 6000]; % nm
+                      %sets the limits of the x axis
+
+data = load(outfile_this); %this reads the data from OPC-response_hr.dat
+Dp = data(:,1); %gets particle diameters from first column of data
+log10_I1 = data(:,2); %gets light intensity from second column for PSL
+                          %which is the black points on the graph
+log10_I2 = data(:,3); %gets LI from third column for Amm. Sulf.
+log10_I3 = data(:,4); %gets LI from fourth column for Succinic Acid
+
+%% Plot
+
+data = load('OPC-response_hr.dat'); %loads data 
+Dp_hr = data(:,1);log10_I3_hr = data(:,4);
+
+plot(Dp, log10_I3, '.','Color','b', 'LineWidth', 0.75); % Blue is Succinic Acid
+% plot(Dp_hr, log10_I3_hr, '-','Color','b', 'LineWidth', 0.75); % Blue is Succinic Acid
+
+avgval = log10_I3_hr; 
+npts = 4;
+for ii = npts+1:length(log10_I3_hr)-npts
+    avgval(ii) = mean(log10_I3_hr(ii-npts:ii+npts));
+end
+
+plot(Dp_hr, avgval, '-','Color','r', 'LineWidth', 0.75); % Blue is Succinic Acid
+                                                         %red gives avg of blue
+                                                         %dots which
+                                                         %smooths the data
+                                                         %it looks magenta
+                                                         %but its just red
+                                                         %on top of blue
+set(gca, 'XScale', 'log') %makes it log scale
+
+return 

@@ -147,7 +147,8 @@ function accumulate()
         0.0 #zeros if fails
     end
 
-    #extracts raw per-bin particle counts(size distribution) 
+    #extracts raw per-bin particle counts(size distribution)
+    psd = try
         b = split(a[2], "\r")
         c = split(b[1], ",")
         psd = extract(b[1], 12:length(c))

@@ -1,0 +1,219 @@
+style = :solid
+#= Notes 
+
+CPC = Condensation Particle Counter, measures total particle concentration (number of particles per cm3) by growing them to optically detectable sizes using a working fluid (butanol in our case)
+
+=#
+
+# Plot 4: Raw Aerson Size Distribution
+plot4 = InspectDR.Plot2D(:log, :lin, title = "") #x-axis(log scale) = diameter, y-axis  = concentration
+InspectDR.overwritefont!(plot4.layout, fontname = "Helvetica", fontscale = 1.2)
+plot4.layout[:enable_legend] = true #legend
+plot4.layout[:halloc_legend] = 170  #legend stuff
+plot4.layout[:halloc_left] = 50     #label stuff
+plot4.layout[:enable_timestamp] = false #disable automatic timestamp on plot
+plot4.layout[:length_tickmajor] = 10
+plot4.layout[:length_tickminor] = 6
+plot4.layout[:format_xtick] = InspectDR.TickLabelStyle(UEXPONENT) #formats x-axis using scientific notation
+plot4.layout[:frame_data] = InspectDR.AreaAttributes(
+    line = InspectDR.line(style = :solid, color = black, width = 0.5),
+)
+plot4.layout[:line_gridmajor] = InspectDR.LineStyle(:solid, Float64(0.75), RGBA(0, 0, 0, 1))
+
+plot4.xext = InspectDR.PExtents1D()
+plot4.xext_full = InspectDR.PExtents1D(lowerDchart, upperDchart)
+
+a = plot4.annotation
+a.xlabel = "Diameter (nm)"                  #X-Axis label
+a.ylabels = ["Raw concentration (cm-3)"]    #Y-Axis label
+mp4, gplot4 = push_plot_to_gui!(plot4, gui["AerosolSizeDistribution2"], wnd) #attaches plot to GUI panel
+
+#adds data series placeholder points to plot, update with real data during scans
+wfrm = add(plot4, [0.0], [0.0], id = "In-progress")         #in-progress scan is RED
+wfrm.line = line(color = red, width = 2, style = style)
+wfrm = add(plot4, [0.0], [0.0], id = "Completed Scan")      #completed scan is BLACK
+wfrm.line = line(color = black, width = 2, style = style)
+wfrm = add(plot4, [0.0], [0.0], id = "Selected Scan")       #User-selected scan is BLUE
+wfrm.line = line(color = mblue, width = 2, style = style)
+wfrm = add(plot4, [0.0], [0.0], id = "Current D")           #line showing current particle diameter
+wfrm.line = line(color = black, width = 2, style = :solid)
+wfrm = add(plot4, [0.0], [0.0], id = "Min D")               #line showing minimum diameter bound
+wfrm.line = line(color = black, width = 2, style = :solid)
+wfrm = add(plot4, [0.0], [0.0], id = "Max D")               #line showing maximum diameter bound
+wfrm.line = line(color = black, width = 2, style = :solid)
+
+graph = plot4.strips[1]
+graph.grid = InspectDR.GridRect(vmajor = true, vminor = true, hmajor = true, hminor = true) #enables major and minor gridlines
+
+
+# Plot 5: Inverted Size Distribution
+#same axes as plot4, but shows size distribution after inversion (dN/dlnD) instead of raw concentration!
+plot5 = InspectDR.Plot2D(:log, :lin, title = "")
+InspectDR.overwritefont!(plot5.layout, fontname = "Helvetica", fontscale = 1.2)
+plot5.layout[:enable_legend] = true
+plot5.layout[:halloc_legend] = 170
+plot5.layout[:halloc_left] = 50
+plot5.layout[:enable_timestamp] = false
+plot5.layout[:length_tickmajor] = 10
+plot5.layout[:length_tickminor] = 6
+plot5.layout[:format_xtick] = InspectDR.TickLabelStyle(UEXPONENT)
+plot5.layout[:frame_data] = InspectDR.AreaAttributes(
+    line = InspectDR.line(style = :solid, color = black, width = 0.5),
+)
+plot5.layout[:line_gridmajor] = InspectDR.LineStyle(:solid, Float64(0.75), RGBA(0, 0, 0, 1))
+
+plot5.xext = InspectDR.PExtents1D()
+plot5.xext_full = InspectDR.PExtents1D(lowerDchart, upperDchart)
+
+a = plot5.annotation
+a.xlabel = "Diameter (nm)"
+a.ylabels = ["Inverted dN/dlnD (cm-3)"] #y-axis is normalized size distribution (dN/dlnD)
+mp5, gplot5 = push_plot_to_gui!(plot5, gui["AerosolSizeDistribution1"], wnd)
+wfrm = add(plot5, [0.0], [0.0], id = "Completed Scan")      #Completed scan is GREY
+wfrm.line = line(color = mgrey, width = 2, style = style)
+wfrm = add(plot5, [0.0], [0.0], id = "Selected Scan")       #User-selected scan is BLUE
+wfrm.line = line(color = mblue, width = 2, style = style)
+
+graph = plot5.strips[1]
+graph.grid = InspectDR.GridRect(vmajor = true, vminor = true, hmajor = true, hminor = true)
+
+
+# Temperature Data Plot
+plotOpticaT = graph1(:lin)
+plotOpticaT.layout[:halloc_legend] = 110
+mpTemp, gplotOpticaT = push_plot_to_gui!(plotOpticaT, gui["housekeeping1"], wnd) #attaches to housekeeping GUI Panel
+wfrm = add(plotOpticaT, [0.0], [22.0], id = "T1 (°C)") #add temp series with To values of 22C, will update with real data during acquisition
+wfrm.line = line(color = black, width = 2, style = style)       #Temp sensor 1 is BLACK
+wfrm = add(plotOpticaT, [0.0], [22.0], id = "T2 (°C)")
+wfrm.line = line(color = mblue, width = 2, style = style)       #Temp sensor 2 is BLUE
+wfrm = add(plotOpticaT, [0.0], [22.0], id = "Td1 (°C)")
+wfrm.line = line(color = red, width = 2, style = style)         #Dew Point Sensor 1 is RED
+wfrm = add(plotOpticaT, [0.0], [22.0], id = "Td2 (°C)")
+wfrm.line = line(color = mgrey, width = 2, style = style)       #Dew Point Sensor 2 is GREY
+
+#CPC Particle Count Plot
+plotParticle = graph1(:lin)
+plotParticle.layout[:halloc_legend] = 110
+mp3, gplotParticle = push_plot_to_gui!(plotParticle, gui["ParticleGraph"], wnd) #attaches to particle Graph GUI Panel
+wfrm = add(plotParticle, [0.0], [0.0], id = "CPC #1")
+wfrm.line = line(color = black, width = 2, style = style)    #CPC 1 is BLACK
+wfrm = add(plotParticle, [0.0], [0.0], id = "CPC #2")
+wfrm.line = line(color = mblue, width = 2, style = style)    #CPC 2 is BLUE
+wfrm = add(plotParticle, [0.0], [0.0], id = "CPC #3")
+wfrm.line = line(color = red, width = 2, style = style)      #CPC 3 is RED
+
+#Initialized GUI text fields with default start up values
+# a = pwd() |> x -> split(x, "/")
+# path = mapreduce(a -> "/" * a, *, a[2:3]) * "/Data/"
+# outfile = path * "yyyymmdd_hhmm.csv"
+Gtk.set_gtk_property!(gui["DataFile"], :text, outfile)      #Displays current output file path in GUI
+Gtk.set_gtk_property!(gui["ScanNumber"], :text, "-1")       #Scan number starts at -1 so that first scan is labeled as "0" in GUI
+Gtk.set_gtk_property!(gui["ScanCounter"], :text, "1000")    #Scan counter is set to 1000 so that it counts down to 0 during scans, providing a visual indicator of time remaining in scan cycle
+Gtk.set_gtk_property!(gui["ScanState"], :text, "HOLD");     #Initial scan state is "HOLD
+Gtk.set_gtk_property!(gui["setV"], :text, "0");             #Initial voltage set point is 0V
+
+#Scrollable table for Scan Results
+push!(treeView, c0, c1, c2, c3, c4, c5, c6) #creates columns
+push!(scrolledWindow, treeView)             #Embeds table  in scrollable window
+push!(viewport, scrolledWindow)             #Embeds scrollable window in viewport (allows for resizing)
+
+#Configure table of 7 columns to be resizable, sortable, and reorderable by the user
+@_ map(GAccessor.resizable(_, true), [c0, c1, c2, c3, c4, c5, c6]) #makes it resizable
+@_ map(GAccessor.sort_column_id(_[2], _[1]), enumerate([c0, c1, c2, c3, c4, c5, c6])) #makes it sortable
+@_ map(GAccessor.reorderable(_[2], _[1]), enumerate([c0, c1, c2, c3, c4, c5, c6])) #makes it reorderable
+
+#Convert start/end diameters from GUI into correspondinf for SMPS (Set the three voltages as initial condition)
+set_voltage_SMPS("StartDiameter", "StartV")
+set_voltage_SMPS("EndDiameter", "EndV")
+
+function graph1(yaxis) #helps create standard time series graph with consistent formatting for CPC counts, flow rates, and temperature data
+    plot = InspectDR.transientplot(yaxis, title = "") #creates time series plot
+    InspectDR.overwritefont!(plot.layout, fontname = "Arial", fontscale = 1.0)
+    plot.layout[:enable_legend] = true
+    plot.layout[:halloc_legend] = 160
+    plot.layout[:halloc_left] = 50
+    plot.layout[:enable_timestamp] = false
+    plot.layout[:length_tickmajor] = 10
+    plot.layout[:length_tickminor] = 6
+    plot.layout[:format_xtick] = InspectDR.TickLabelStyle(UEXPONENT)
+    plot.layout[:frame_data] = InspectDR.AreaAttributes(
+        line = InspectDR.line(style = :solid, color = black, width = 0.5),
+    )
+    plot.layout[:line_gridmajor] =
+        InspectDR.LineStyle(:solid, Float64(0.75), RGBA(0, 0, 0, 1))
+
+    plot.xext = InspectDR.PExtents1D()
+    plot.xext_full = InspectDR.PExtents1D(0, 205)
+
+    a = plot.annotation
+    a.xlabel = "Time (s)"
+    a.ylabels = ["Temperature (C)"]
+
+    return plot
+end
+
+function size_distribution() #creates a POPS particle size histogram plot 
+    plotPOPSSize = InspectDR.Plot2D(:log, :lin, title = "") #x-axis(log scale) = digitizer channel (proportional to particle diameter), y-axis = counts in each channel
+    InspectDR.overwritefont!(plotPOPSSize.layout, fontname = "Arial", fontscale = 1.0)
+    plotPOPSSize.layout[:enable_legend] = true
+    plotPOPSSize.layout[:halloc_legend] = 160
+    plotPOPSSize.layout[:halloc_left] = 50
+    plotPOPSSize.layout[:enable_timestamp] = false
+    plotPOPSSize.layout[:length_tickmajor] = 10
+    plotPOPSSize.layout[:length_tickminor] = 6
+    plotPOPSSize.layout[:format_xtick] = InspectDR.TickLabelStyle(UEXPONENT)
+    plotPOPSSize.layout[:frame_data] = InspectDR.AreaAttributes(
+        line = InspectDR.line(style = :solid, color = black, width = 0.5),
+    )
+    plotPOPSSize.layout[:line_gridmajor] =
+        InspectDR.LineStyle(:solid, Float64(0.75), RGBA(0, 0, 0, 1))
+
+    plotPOPSSize.xext = InspectDR.PExtents1D()
+    plotPOPSSize.xext_full = InspectDR.PExtents1D(10, 65000) #x-axis ranges POPS digitizer channel range from 10-65000
+
+    graph = plotPOPSSize.strips[1]
+    graph.yext = InspectDR.PExtents1D()
+    graph.yext_full = InspectDR.PExtents1D(0.001, 1000) #y-axis ranges from 0.001 to 1000 counts
+
+    graph = plotPOPSSize.strips[1]
+    graph.grid =
+        InspectDR.GridRect(vmajor = true, vminor = true, hmajor = true, hminor = true)
+
+    a = plotPOPSSize.annotation
+    a.xlabel = "Digitizer-PH Amplitude (ch)" #x-axis is raw digitizer channel
+    a.ylabels = ["Counts"]
+
+    return plotPOPSSize
+end
+
+# POPS Data Plots 
+style = :solid
+POPSConc = graph1(:lin) #concentration plot with linear y-axis, time on x-axis
+POPSConc.layout[:halloc_legend] = 110
+mpConc, gplotConc = push_plot_to_gui!(POPSConc, gui["POPSConcentration"], wnd)
+wfrm = add(POPSConc, [0.0], [22.0], id = "Conc (# cm-3)")
+wfrm.line = line(color = black, width = 2, style = style) #POPS concentration is BLACK
+
+style = :solid
+POPSFlow = graph1(:lin) #flow rate plot with linear y-axis, time on x-axis
+POPSFlow.layout[:halloc_legend] = 110
+mpFlow, gplotFlow = push_plot_to_gui!(POPSFlow, gui["POPSFlow"], wnd)
+wfrm = add(POPSFlow, [0.0], [0.0], id = "Flow (L min-1)")
+wfrm.line = line(color = black, width = 2, style = style)
+graph = POPSFlow.strips[1]
+graph.yext = InspectDR.PExtents1D()
+graph.yext_full = InspectDR.PExtents1D(0, 0.4) #y-axis fixed to 0.4 L/min to reflect expected POPS flow rates
+
+style = :solid
+POPSCount = graph1(:lin)   #Raw particle count plot with linear y-axis, time on x-axis
+POPSCount.layout[:halloc_legend] = 110
+mpCount, gplotCount = push_plot_to_gui!(POPSCount, gui["CountData"], wnd)
+wfrm = add(POPSCount, [0.0], [0.0], id = "Count (# s-1)")
+wfrm.line = line(color = black, width = 2, style = style)
+
+style = :solid
+POPSHist = size_distribution() #POPS particle size histogram plot with linear y-axis, time on x-axis, uses size_distribution()  to create a standardized plot format for POPS size distribution histogram
+POPSHist.layout[:halloc_legend] = 110
+mpHist, gplotHist = push_plot_to_gui!(POPSHist, gui["Histogram"], wnd)
+wfrm = add(POPSHist, [0.0], [0.0], id = "Count (# s-1)")
+wfrm.line = line(color = black, width = 2, style = style)

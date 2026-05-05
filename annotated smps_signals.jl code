@@ -1,0 +1,196 @@
+# + 
+# Signals for SMPS control
+# Setup scan logic and DAQ and Signals. 
+# Generates Reactive signals and defines SMPS post-processing
+# -
+#= Terminology & Notes
+Flushing = purgining leftover particles so they contaminate the next scan.
+    (Voltage holds at endVoltage and the system clears out the remaining particles in the tubing)
+
+Hold = time for the system to stabilize before measurements begin
+    (Voltage holds at startVoltage, allows system to stabilize before scan begins)
+
+Scan = active measurment phase where different particles sizes are selected at the different voltages
+    (Voltage increases from startVoltage value to endVoltage value)
+
+GUI stores values as strings, need to convert them to floats to use in calculations
+=#
+
+#= unpacks all scan timing and voltage parameters from GUI, defines the logic for the SMPS scan states (HOLD, SCAN, FLUSH, DONE), 
+defines how the SMPS voltage changes over time during the scan, and sets up termination and reset conditions for the scan. 
+Returns multiple Reactive signals that are used in the main DAQ loop to control the SMPS and process data in real-time=#
+function smps_signals() 
+    holdTime, scanTime, flushTime, scanLength, startVoltage, endVoltage, c =
+        scan_parameters()
+
+    # Set SMPS states
+    function state(currentTime) #determines scan phase based on elapsed time
+        holdTime, scanTime, flushTime, scanLength, startVoltage, endVoltage, c =
+            scan_parameters() #reviews GUI parameters to determine current scan settings
+        state = :SMPS
+        scanState = "DONE"
+        (currentTime <= scanLength) && (scanState = "FLUSH") #flushing 
+        (currentTime < scanTime + holdTime) && (scanState = "SCAN") #scanning
+        (currentTime <= holdTime) && (scanState = "HOLD") #holding 
+        scanState = (state == :SMPS) ? scanState : "CLASSIFIER" #checks to see if state is in SMPS mode
+
+        return scanState #rturns "HOLD", "SCAN", "FLUSH", "DONE", or "CLASSIFIER" 
+    end
+
+    # Set SMPS voltage
+    function smps_voltage(t) #calculates appropriate voltage based on can state returned above 
+        holdTime, scanTime, flushTime, scanLength, startVoltage, endVoltage, c =
+            scan_parameters() #recalls GUIs parameters 
+        classifierV = @>> get_gtk_property(gui["ClassifierV"], :text, String) parse(Float64) #reads and converse classifier voltage from GUI to float
+        (smps_scan_state.value == "HOLD") && (myV = startVoltage) #HOLD: stays at start voltage
+        (smps_scan_state.value == "SCAN") &&
+            (myV = exp(log(startVoltage) + c * (t - holdTime))) #SCAN: increases voltage
+        (smps_scan_state.value == "FLUSH") && (myV = endVoltage) #FLUSH: stays at end voltage 
+        (smps_scan_state.value == "DONE") && (myV = endVoltage)  #DONE: stays at end voltage, but triggers termination and reset conditions in main loop to start new scan
+        (smps_scan_state.value == "CLASSIFIER") && (myV = classifierV) #uses classifier voltage 
+
+        return [classifierV, myV] # Returns array of both classifier and SMPS voltages
+
+    # Determine cleanup procedure once scan is done
+    function smps_scan_termination(s) #called when "DONE" is returned from state function
+        try
+            delete!(tenHz_df, 1) #removes first row of 10Hz DataFrame, which contains the data from the just completed scan
+        catch
+        end
+        if length(tenHz_df[!, :state]) > 10 #only saves data if enough samples were collected 
+            current_file = Dates.format((tenHz_df[!, :Timestamp])[1], "yyyymmdd_HHMM")
+            path1 = path * "Raw 10 Hz/" * datestr.value #output directory path for 10Hz data
+            read(`mkdir -p $path1`) #creats output directory if it doesn't already exist
+            outfile = path1 * "/" * current_file * ".csv" #write 10 Hz DataFrame to CSV
+            tenHz_df |> CSV.write(outfile) #display output filepath in GUI
+            set_gtk_property!(gui["DataFile"], :text, outfile)
+
+#=
+Seems to be previously used for 1Hz data saving, size distribution plotting, 
+and writing summary stats to GUI listbox
+Kept for reference
+=#
+
+            # path2 = path * "Raw 1 Hz/" * datestr.value
+            # read(`mkdir -p $path2`)
+            # outfile = path2 * "/" * current_file * ".csv"
+            # oneHz_df |> CSV.write(outfile)
+
+            # path3 = path * "Processed/" * datestr.value
+            # read(`mkdir -p $path3`)
+            # outfile = path3 * "/" * SizeDistribution_filename.value
+
+            # Query basic SMPS setup for storage
+            # t = parse_box("TemperatureSMPS", 22.0) + 273.15
+            # p = parse_box("PressureSMPS", 1001.0) * 100.0
+            # qsh = parse_box("SheathFlowSMPS", 10.0) * lpm
+            # qsa = parse_box("SampleFlowSMPS", 1.0) * lpm
+            # polarity = parse_box("ColumnPolaritySMPS")
+            # column = parse_box("DMATypeSMPS")
+            # τᶜ = parse_box("PlumbTime", 4.1)
+            # SMPSsetup = (t, p, qsh, qsa, polarity, column, τᶜ)
+            # useCounts = get_gtk_property(gui["UseCounts"], :state, Bool)
+
+            # Compute inversion and L-curve (see Petters (2018), Notebooks 5 and 6)
+            # λ₁ = parse_box("LambdaLow", 0.05)
+            # λ₂ = parse_box("LambdaHigh", 0.05)
+            # Ψ₀, Ψ₁, Ψ₂  =  initializeDefaultMatrices(δˢᵐᵖˢ)
+			# N = @> solve(Ψ₀, ℝ.value.N; λ₁ = λ₁, λ₂ = λ₂) getfield(:x) clean
+            # 𝕟 = SizeDistribution(
+            #     [],
+            #     ℝ.value.De,
+            #     ℝ.value.Dp,
+            #     ℝ.value.ΔlnD,
+            #     N ./ ℝ.value.ΔlnD,
+            #     N,
+            #     :regularized,
+            # )
+
+            # Plot the inverted data and L-curve
+            # addseries!(reverse(𝕟.Dp), reverse(𝕟.S), plot5, gplot5, 1, false, true)
+            # Write DataFrames for processed data
+            # push!(
+            #     inversionParameters,
+            #     Dict(
+            #         :Timestamp => Dates.format((tenHz_df[!, :Timestamp])[1], "HH:MM"),
+            #         :Ncpc => mean(oneHz_df[!, :N2cpcSerial]),
+            #         :N => sum(𝕟.N),
+            #         :A => sum(π / 4.0 .* (𝕟.Dp ./ 1000.0) .^ 2 .* 𝕟.N),
+            #         :V => sum(π / 6.0 .* (𝕟.Dp ./ 1000.0) .^ 3 .* 𝕟.N),
+            #         :useCounts => useCounts,
+            #     ),
+            # )
+
+            # Write to GUI
+            # ID = smps_scan_number.value
+            # ta = Dates.format((tenHz_df[!, :Timestamp])[1], "HH:MM")
+            # mRH = parse_missing(oneHz_df[!, :RHsh] |> mean)
+            # mN = parse_missing(inversionParameters[end, :N])
+            # mA = parse_missing(inversionParameters[end, :A])
+            # mV = parse_missing(inversionParameters[end, :V])
+            # mCPC = parse_missing(inversionParameters[end, :Ncpc])
+
+            # insert!(listStore,1,(ID, ta, mRH, mN, mA, mV, mCPC))
+            # if length(listStore) > 100
+            #     pop!(listStore)
+            # end    
+            set_gtk_property!(vAdjust, :value, 0.0) #resets scroll bar back to the top of the scan results in GUI, inserts new scan results at top of the list 
+
+
+            # push!(ninv, 𝕟)
+            push!(response, ℝ.value) #saves current SMPS responds function to a vector for reference in future scans
+
+            # push!(
+            #     SizeDistribution_df,
+            #     Dict(
+            #         :Timestamp => (tenHz_df[!, :Timestamp])[1],
+            #         :useCounts => useCounts,
+            #         :Response => deepcopy(ℝ.value),
+            #         :Inverted => deepcopy(𝕟),
+            #         :oneHz_df => deepcopy(oneHz_df),
+            #         :tenHz_df => deepcopy(tenHz_df),
+            #     ),
+            # )
+
+            # @save outfile SizeDistribution_df δˢᵐᵖˢ Λˢᵐᵖˢ SMPSsetup inversionParameters
+
+            # Print summary data to textbox
+            # ix = size(inversionParameters, 1)
+
+            push!(smps_scan_number, smps_scan_number.value += 1)    #increment scan counter for next scan
+        end
+
+        # reset response function and clear 1Hz and 10Hz DataFrames
+        N = zeros(length(δˢᵐᵖˢ.Dp))  #sets array to zzeros
+        push!(ℝ, SizeDistribution([[]], δˢᵐᵖˢ.De, δˢᵐᵖˢ.Dp, δˢᵐᵖˢ.ΔlnD, N, N, :response)) #resets response function to empty values
+        delete!(tenHz_df, collect(1:length(tenHz_df[!, :Timestamp]))) #clears 10Hz DataFrame for next scan
+        # delete!(oneHz_df, collect(1:length(oneHz_df[!, :Timestamp])))
+    end
+
+    # Generate signals and connect with functions
+    smps_elapsed_time = foldp(+, 0.0, tenHz)            #cumulative elapsed time
+    smps_scan_state = map(state, smps_elapsed_time)     #current scan phase
+    smps_scan_number = Signal(1)                        #tracks current scan number
+    V = map(smps_voltage, smps_elapsed_time)            #current voltage pair
+    sleep(2)                                            #wait 2s to allow voltage signals to stabilize
+    Vs = map(v -> [v[2], v[1], v[2], v[1]], V)          #reorder voltage array for Labjack channel mapping
+    Dp = map(v -> ztod(Λˢᵐᵖˢ, 1, vtoz(Λˢᵐᵖˢ, v)), V)    #converts voltage to particle diameter (Dp) using DMA transfer functions
+    termination = map(smps_scan_termination, filter(s -> s == "DONE", smps_scan_state)) #starts termination when scan state is "DONE"
+    reset = map(
+        s -> push!(smps_elapsed_time, 0.0),
+        filter(t -> t > scanLength + 5.0, smps_elapsed_time), #resents elapsed time w/5s buffer
+    )
+    smps_elapsed_time, smps_scan_state, smps_scan_number, termination, reset, V, Vs, Dp #returns all signals
+end
+
+# Read scan settings from GUI
+function scan_parameters() #reads and converts GUI values from strings to floats
+    holdTime = @>> get_gtk_property(gui["Hold"], :text, String) parse(Float64)          #hold durations
+    scanTime = @>> get_gtk_property(gui["Scant"], :text, String) parse(Float64)         #scan duration
+    flushTime = @>> get_gtk_property(gui["Flush"], :text, String) parse(Float64)        #flush duration
+    startVoltage = @>> get_gtk_property(gui["StartV"], :text, String) parse(Float64)    #starting voltage for scan
+    endVoltage = @>> get_gtk_property(gui["EndV"], :text, String) parse(Float64)        #ending voltage for scan
+    scanLength = holdTime + scanTime + flushTime                                        #total scan cycle time  
+    c = log(endVoltage / startVoltage) / (scanTime)                                     #exponential ramp rate constant for voltage sweep
+    return holdTime, scanTime, flushTime, scanLength, startVoltage, endVoltage, c
+end

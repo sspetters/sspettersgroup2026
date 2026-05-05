@@ -2,8 +2,22 @@
 #= Functions that handle Labjack IO for YASP
 Lackjack U6 is a USB data acquisition device used to read alaog voltages,
 control digital outputs,  and write DAC voltages fro SMPS hardware control
+The Labjack protocol can only send one byte at a time, but DAC voltages 
+need 16-bit precision for fine control. So a 16-bit number has to be 
+split into two bytes before sending (LSB and MSB)
+
+LSB = least significant byte, the lower 8 bits of a 16-bit DAC value, controls fine voltage adjustments
+MSB= most significant byte, the upper 8 bits of a 16-bit DAC value, controls coarse voltage adjustments
 
 DAC = Digital to Analog Converter, converts digital signals (binary) to analog voltages for controlling hardware
+DAC0 = outputs the SMPS column voltage 
+DAC1 = outputs classifier voltage for CPC flow control
+
+Analog Inout read at 24-bit resolution
+Gain amplifies the input signal for higher precision voltage measurements, but reduces the voltage range. 
+Gain of 4 allows for high resolution readings of low voltage signals (±2.5V range) on AIN0, while gains 
+of 0 (±10V range) are used for other channels that measure higher voltages.
+
 =#
 
 
@@ -30,20 +44,21 @@ function setupLabjackBuffers(Vdac0, Vdac1, BitFIO3, BitFIO4; gain1 = 4)
 
     binVoltage16 = convert(UInt16, round(dBytesVolt, digits = 0)) #rounds to nearest integer and stores as 16-bit unsigned integer
     LSB0 = UInt8(binVoltage16 & 255)                              #extracts least significant byte (lower 8 bits) of DACO value
-    MSB0 = UInt8((binVoltage16 & 65280) / 256)                      
+    MSB0 = UInt8((binVoltage16 & 65280) / 256)                    #extracts most significant byte (upper 8 bits) of DAC0 value
 
     dacNumber = 1
     dBytesVolt =
-        Vdac1 * caliInfo.ccConstants[17+dacNumber*2] + caliInfo.ccConstants[18+dacNumber*2]
+        Vdac1 * caliInfo.ccConstants[17+dacNumber*2] + caliInfo.ccConstants[18+dacNumber*2] #applies calibrartion for DAC1
     if dBytesVolt > 65535
         dBytesVolt = 65535
     elseif dBytesVolt < 0
         dBytesVolt = 0
     end
     binVoltage16 = convert(UInt16, round(dBytesVolt, digits = 0))
-    LSB1 = UInt8(binVoltage16 & 255)
-    MSB1 = UInt8((binVoltage16 & 65280) / 256)
+    LSB1 = UInt8(binVoltage16 & 255) #least significant byte of DAC1 value
+    MSB1 = UInt8((binVoltage16 & 65280) / 256) #most significant byte of DAC1 value
 
+    #buffer size calculations(based on U6 datasheet protocol):
     # 8 AIN 24bit, 1 AIN14 (T), 2 FIO Channels Dir + 2 FIO Write + 2 Counter + 2 DAC
     # IOType input bytes  = 8*4 + 1*4 + 2*2 + 2*2 + 2*2 + 2*3 = 54 bytes
     # IOType output bytes = 8*3 + 1*3 + 2*0 + 2*0 + 2*4 = 35 bytes
@@ -51,20 +66,24 @@ function setupLabjackBuffers(Vdac0, Vdac1, BitFIO3, BitFIO4; gain1 = 4)
     # Send buffer in words = (1 + 54 + 1)/2 = 25
     # Receive buffer in words  = (8 + 35 + 1)/2 = 22
     sl, rl = (28 * 2 + 6), (22 * 2 + 8)   # Length of send buffer,receive buffer in bytes
-    sendBuff, rec = zeros(UInt8, sl), zeros(UInt8, rl)
+    sendBuff, rec = zeros(UInt8, sl), zeros(UInt8, rl) #initalize both buffers with zeros 
 
     # Block 1 Bytes 1-5 Configure Basic Setup
     # Bytes 0,4,5 are reserved for checksum
-    sendBuff[1+1] = UInt8(0xF8)    # Command byte
+    sendBuff[1+1] = UInt8(0xF8)    # Command byte (tells Labjack a feedback command )
     sendBuff[2+1] = 28             # Number of data words
-    sendBuff[3+1] = UInt8(0x00)    # Extended command number
+    sendBuff[3+1] = UInt8(0x00)    # Extended command number (0 for feedback)
 
     # Block 2 Echo + Bytes 7-XX
     # Bytes 7-XX Configure Channels
     # Must be even number of bytes
-    sendBuff[6+1] = 0           # Echo
+    sendBuff[6+1] = 0           # Echo byte: Labjack will return this value to confirm reciept 
 
-    # AIN0
+    # Configure AIN0–AIN7: 8 analog input channels at 24-bit resolution
+    # Resolution 9 = high resolution mode
+    # Gain set by gain1 parameter for AIN0, fixed at 0 (±10V range) for AIN1–AIN7
+
+    # AIN0, high gain channel, used for precision voltage measurement
     sendBuff[7+1] = 2          # IOType is AIN24
     sendBuff[8+1] = 0          # Channel 0
     sendBuff[9+1] = 9 + gain1 * 8   # Resolution & Gain
@@ -112,42 +131,46 @@ function setupLabjackBuffers(Vdac0, Vdac1, BitFIO3, BitFIO4; gain1 = 4)
     sendBuff[37+1] = 9 + 0 * 16   # Resolution & Gain
     sendBuff[38+1] = 0 + 0 * 128  # Settling & Differential
 
-    # AIN14
+    
+    # AIN14, internal temperature sensor channel
     sendBuff[39+1] = 2           # IOType is AIN24
     sendBuff[40+1] = 14          # Positive channel = 14 (temperature sensor)
     sendBuff[41+1] = 9 + 0 * 16    # Resolution & Gain 
     sendBuff[42+1] = 0 + 0 * 128   # SettlingFactor & Differential
-
-    # FIO4
+    
+    #configure FIO digital output pins
+    # FIO4, sets pin direction to output
     sendBuff[43+1] = 13         # IOType is BitDirWrite
     sendBuff[44+1] = 4 + 1 * 128  # FIO3 & Direction = 1 (Output)
 
-    # FIO5
+    # FIO5, sets pin direction to output
     sendBuff[45+1] = 13         # IOType is BitDirWrite
     sendBuff[46+1] = 5 + 1 * 128  # FIO3 & Direction = 1 (Output)
 
-    # FIO4
+    # FIO4, write digital state (high/low) based on BitFIO3 argument
     sendBuff[47+1] = 11         # IOType is BitState Write
     sendBuff[48+1] = 4 + UInt8(BitFIO3) * 128  # FIO3 & Bit
 
-    # FIO5
+    # FIO5, write digital state based on BitFIO4 argument
     sendBuff[49+1] = 11         # IOType is BitState Write
     sendBuff[50+1] = 5 + UInt8(BitFIO4) * 128  # FIO3 & Bit
 
-    # Counter0
+    #Cconfigures hardware counters and DAC outputs
+    # Counter0, read pulses count from external device
     sendBuff[51+1] = 54         # IOType is Counter0
     sendBuff[52+1] = 0          # Reset counter
 
-    # Counter1
+    # Counter1, reads pulse count from second external device
     sendBuff[53+1] = 55         # IOType is Counter1
     sendBuff[54+1] = 0          # Reset counter
 
-    # DAC0, 16 bit
+    #writes DAC output voltages 
+    # DAC0, 16 bit voltage output, splits into LSB and MSB bytes
     sendBuff[55+1] = 38          # IOType is DAC# (16-bit)
     sendBuff[56+1] = LSB0        # Value LSB
     sendBuff[57+1] = MSB0        # Value MSB
 
-    # DAC1, 16 bit
+    # DAC1, 16 bit voltage output
     sendBuff[58+1] = 39          # IOType is DAC# (16-bit)
     sendBuff[59+1] = LSB1        # Value LSB
     sendBuff[60+1] = MSB1        # Value MSB
@@ -155,25 +178,38 @@ function setupLabjackBuffers(Vdac0, Vdac1, BitFIO3, BitFIO4; gain1 = 4)
     # Padding bye (size of a packet must be an even number of bytes)
     sendBuff[61+1] = 0
 
+    #converts Julia arrays to C-style buffers for passing to Labjack C functions
     # Create labjack buffer data types to pass to C-functions
     send = labjackBuffer{sl}(NTuple{sl,UInt8}(sendBuff[i] for i = 1:sl))
     rec = labjackBuffer{rl}(NTuple{rl,UInt8}(rec[i] for i = 1:rl))
 
-    # Fills bytes 0,4,5 with checksums
+    #computes and fills bytes 0,4,5 with checksums
     extendedChecksum!(send)
     return send, rec
 end
 
+#= Perform a complete Labjack read/write cycle:
+    Writes DAC voltages and digital outputs
+    Reads all analog inputs, temperature, and counters
+    HANDLE: Labjack device handle
+    Vdac0, Vdac1: voltages to output on DAC channels
+    caliInfo: calibration constants for this Labjack unit
+    caliInfoTdac: calibration for TDAC accessory board (false if not used)
+    gain1: gain setting for AIN0 
+=#
 function labjackReadWrite(HANDLE, Vdac0, Vdac1, caliInfo; caliInfoTdac = false, gain1 = 4)
 
     if ~isa(caliInfoTdac, Bool)
         setLJTDAC(HANDLE, caliInfoTdac, 0, Vdac0, Vdac1)
     end
+
+    #build send/recieve buffers and executes communication cycle
     # AIN0 (gain1) is set to 4 for high res acquisition of voltage.
     sendIt, recordIt = setupLabjackBuffers(Vdac0, Vdac1, true, true; gain1 = gain1)
-
     labjackSend(HANDLE, sendIt)
     labjackRead!(HANDLE, recordIt)
+
+    #calibrates raw 24-bit reading readings from receive buffer into physical voltages 
     AIN0 = calibrateAIN(caliInfo, recordIt, 9, 0, 1, 10, 11, 12)  # Calibrate AIN0
     AIN1 = calibrateAIN(caliInfo, recordIt, 9, 0, 1, 13, 14, 15)  # Calibrate AIN1
     AIN2 = calibrateAIN(caliInfo, recordIt, 9, 0, 1, 16, 17, 18)  # Calibrate AIN2
@@ -183,30 +219,42 @@ function labjackReadWrite(HANDLE, Vdac0, Vdac1, caliInfo; caliInfoTdac = false, 
     AIN6 = calibrateAIN(caliInfo, recordIt, 9, 0, 1, 28, 29, 30)  # Calibrate AIN5
     AIN7 = calibrateAIN(caliInfo, recordIt, 9, 0, 1, 31, 32, 33)  # Calibrate AIN5
     AIN14 = calibrateAIN(caliInfo, recordIt, 9, 0, 1, 34, 35, 36)  # Calibrate AIN14
+    
+    #converts AIN14 voltage to Kelvin using calibration constants
     Tk = caliInfo.ccConstants[23] * AIN14 + caliInfo.ccConstants[24] # Temp in K
+    
+    #reconstruct 32-bit counter values from 4 individual bytes in receive buffer
+    #each counter byte is weighted by its position: byte1 + byte2*256 + byte3*65536 + byte4*16777216
     counts1 =
         recordIt.buff[37] +
         recordIt.buff[38] * 256 +
         recordIt.buff[39] * 65536 +
-        recordIt.buff[40] * 16777216
+        recordIt.buff[40] * 16777216 #counter0 total pulse count
     counts2 =
         recordIt.buff[41] +
         recordIt.buff[42] * 256 +
         recordIt.buff[43] * 65536 +
-        recordIt.buff[44] * 16777216
+        recordIt.buff[44] * 16777216 #counter1 total pulse count
 
+    #gets previous counter values and computes count since last cycle
+    #falls back to current counts if no previous value exist
     N1 = try
-        (labjack_signals.value[3])[1]
+        (labjack_signals.value[3])[1] #previous counter0 val
     catch
-        counts1
+        counts1 #first cycle (delta = 0)
     end
 
     N2 = try
-        (labjack_signals.value[3])[2]
+        (labjack_signals.value[3])[2] #previous counter1 val
     catch
-        counts2
+        counts2 #first cycle (delta = 0)
     end
 
+    #returns all measured values 
+    #[AIN0–AIN7] are the calibrated analog voltages
+    #Tk is the Labjack internal temperature in Kelvin
+    #[counts1, counts2] is the absolute cumulative counter values
+    #[counts1-N1, counts2-N2] is the change in counts since last cycle (particles counted this cycle)
     return [AIN0, AIN1, AIN2, AIN3, AIN4, AIN5, AIN6, AIN7],
     Tk,
     [counts1, counts2],

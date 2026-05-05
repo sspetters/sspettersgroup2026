@@ -1,0 +1,167 @@
+# POPS DAQ Logic
+#= Notes
+
+Handles serial communication, data acquisition, and processing for the POPS instrument. 
+Establishes a connection to the POPS via a specified serial port, configures the 
+communication parameters, and defines functions to acquire raw data packets and process
+them into meaningful measurements such as flow rate, particle concentration, and size 
+distribution
+Acquired data is stored in circular buffers for real-time plotting and analysis, and
+is also saved to text files for long-term storage
+Includes error handling to manage potential issues with data extraction and parsing 
+from the raw packets.
+
+baud = speed of communications 
+    (how many signals changes happen per second)
+partity = error detection method 
+RTS = Request to send 
+CTS = Clear to send
+DTR = Data terminal ready
+DSR = Data set ready
+
+carriage return = invisible character that marks the end of a line in text data
+=#
+using PrintedOpticalParticleSpectrometer #loads POPS Instrument library
+
+#opens serial port connection to POPS
+function pconfig(portname::String) #takes serial port name as input
+    #following is standard communication settings 
+    baudRate = 115200   #data transfer speed (bits per second)
+    dataBits = 8        #number of bits per data packet (per chunk of data)
+    stopBits = 1        #number of stop bits to signal end of data packet
+    parity = SP_PARITY_NONE     #no parity bit used for error checking in data transmission
+
+    port = LibSerialPort.sp_get_port_by_name(portname)          #Finds serial port by name
+    LibSerialPort.sp_open(port, SP_MODE_READ_WRITE)             #opens the port for both reading & writing
+    config = LibSerialPort.sp_get_config(port)                  #gets current port configuration 
+    LibSerialPort.sp_set_config_baudrate(config, baudRate)      #applies baud rate
+    LibSerialPort.sp_set_config_parity(config, parity)          #applies parity 
+    LibSerialPort.sp_set_config_bits(config, dataBits)          #applies data bits 
+    LibSerialPort.sp_set_config_stopbits(config, stopBits)      #applies stop bits
+    LibSerialPort.sp_set_config_rts(config, SP_RTS_OFF)         #Disables RTS hardware flow control
+    LibSerialPort.sp_set_config_cts(config, SP_CTS_IGNORE)      #Ignores CTS harwarde flow control
+    LibSerialPort.sp_set_config_dtr(config, SP_DTR_OFF)         #Disables DTR signal
+    LibSerialPort.sp_set_config_dsr(config, SP_DSR_IGNORE)      #Ignores DSR signal
+    LibSerialPort.sp_set_config(port, config)                   #Applies all settings to port
+
+    return port #returns configured port for use in data streaming
+end
+
+const bp = "/home/aerosol/Data/"      # Base path for data saving
+const portName = "/dev/ttyUSB1"       # Serial port name for POPS
+const nbins = get_gtk_property(gui["nbins"], :text, String) |> x -> parse(Int, x)       #number of size bins read from GUI
+const logmin = get_gtk_property(gui["logmin"], :text, String) |> x -> parse(Float64, x) #lower bound log size from GUI
+const logmax = get_gtk_property(gui["logmax"], :text, String) |> x -> parse(Float64, x) #upper bound log size from GUI
+const BUFFLEN = 1000 #length of circular data buffers (stores last 1000 data points)
+const BUFFAV = 120   #number od spectra to buffer for averaging (120s at 1Hz)
+
+#converts raw digitizers pulse height (ph) to a bin index
+function channel(ph)
+    logdelta = (logmax - logmin) / nbins #width of bin in log space
+    return (log10(ph) - logmin) / logdelta |> floor |> Int #map pulse height to bin number
+end
+
+#converts bin index back to pulse height amplitude
+function ph(i)
+    logdelta = (logmax - logmin) / nbins #width of bin in log space
+    return Int.(round.(exp10(i * logdelta + logmin), digits = 0)) #converts bin index to pulse height value
+end
+
+#converts digitizer pulse height to physical particle diameters(nm) (using calibration info)
+function calibrate(ph) 
+    df = CSV.read("phcalibration.csv", DataFrame) #read pulse height calibration
+    nitp = interpolate((df[!, :Dp],), df[!, :ph], Gridded(Linear())) #creates interpolation function to map pulse height to particle diameter based on calibration data
+    Ds = 110:1:6990 #diameter range for POPS (110nm to 6990nm) with 1nm resolution
+    Dp = map(x -> Ds[argmin((nitp.(Ds) .- x) .^ 2)], ph) #array that matches closest diameter to each pulse height value
+    return Dp #returns array of particle diameters corresponding to input pulse heights
+end
+
+const digitizerPH = ph.(1:nbins) #comoutes pulse height value for each bin index
+const Dps = calibrate(digitizerPH) #converts pulse heights to particle diameters
+const portPOPS = pconfig(portName) #opens and configures the serial port for POPS communication using the pconfig function
+@async PrintedOpticalParticleSpectrometer.stream(portPOPS, bp * "pops/pops") #start async raw data stream from POPS to disk
+
+#reads last POPS data pack and formats as a string
+function get_packet() 
+    pops = PrintedOpticalParticleSpectrometer.get_current_record()  #calls lastest record from POPS data stream
+    tc = Dates.format(now(), "yyyy-mm-ddTHH:MM:SS")                 #formats current timestamp as string
+    mapfoldl(x -> string(x) * ";", *, [tc, pops])[1:end-1]          #joins timestamp and data with ";"
+end
+
+#constants for circular buffer for storing new POPS measurements 
+const dataBufferdt = CircularBuffer{DateTime}(BUFFLEN)              #timestamps
+const dataBufferQ = CircularBuffer{Float64}(BUFFLEN)                #flowrate
+const dataBufferRH = CircularBuffer{Float64}(BUFFLEN)               #relative humidity
+const dataBufferN = CircularBuffer{Float64}(BUFFLEN)                #total particle concentration
+const dataBufferCounts = CircularBuffer{Vector{Float64}}(BUFFAV)    #raw bin counts per spectrum
+const dataBufferPSD = CircularBuffer{Vector{Float64}}(BUFFAV)       #normalized particle size distribution (PSD) per spectrum 
+
+#fills scalar buffers with empty values to prep plot
+for i = 1:BUFFLEN
+    t = now()
+    push!(dataBufferdt, t)      #initializes timestamp buffer with current time values, updates with real timestamps as data is acquired
+    push!(dataBufferQ, 0.0)     #sets flowrates to zeros
+    push!(dataBufferN, 0.0)     #sets particle concentrations to zeros
+    push!(dataBufferRH, 0.0)    #sets relative humidity to zeros
+end
+
+#fills spectrum buffers with zeros
+for i = 1:BUFFAV
+    push!(dataBufferCounts, zeros(nbins)) #zero raw counts for each bin
+    push!(dataBufferPSD, zeros(nbins)) #zero size distribution for each bin
+end
+
+#function to extract specific values from the raw data packet, splits the packet by commas, selects the ith value, and parses it as a float
+extract(x, i) = @chain split(x, ",") getindex(_, i) parse.(Float64, _)
+
+#write raw POPS data packet to daily log file (called at 1 Hz)
+function acquire()
+    x = get_packet() #gets latest raw data packet as a string
+    filter(x -> x != '\r', x) #strips carriage return characters from packets
+    tc = Dates.format(now(), "yyyymmdd") #formats date as file's name
+    open(bp * "pops" * "_" * tc * ".txt", "a") do io #opens daily log file in append mode, creates file if it doesn't exist
+        return write(io, x) #appends packet to file
+    end
+end
+
+#Parse POPS packet and update circular buffers with new measurements (called at 1 Hz)
+function accumulate()
+    x = get_packet() #gets newest data packet as string
+    a = split(x, ";") #splits string into timestamp and data components
+    t = DateTime(a[1]) #parse timestamp
+
+    #extracts flow rate from field 8, convert from mL/min to L/min
+    Q = try
+        extract(a[2], 8) * 60.0 ./ 1000.0
+    catch
+        0.0 #if fails, zeros flow rate
+    end
+
+    #computes total particle concentration (cm^-3) from size distribution data and flow rate 
+    N = try
+        b = split(a[2], "\r")                   #split on carriage return
+        c = split(b[1], ",")                    #splits data row on commas 
+        psd = extract(b[1], 12:length(c))       #extracts bin counts from data packet, starting at field 12 to the end of the packet (number of bins + 11 fields of metadata)
+        N = sum(psd) ./ (Q .* 1000.0 ./ 60.0)   #(total counts)/(volumetric flow rate)
+    catch
+        0.0 #zeros if fails
+    end
+
+    #extracts raw per-bin particle counts(size distribution) 
+        b = split(a[2], "\r")
+        c = split(b[1], ",")
+        psd = extract(b[1], 12:length(c))
+    catch
+        zeros(nbins) #zeros if fails
+    end
+
+    dlnD = log.(Dps[2:end] ./ Dps[1:end-1]) #compute log diameter bin widths (for normalizing size distribution)
+    dlnD = [dlnD; dlnD[end]]                #pads last bin width to match array length
+
+    #pushes all processed values into circular buffers
+    push!(dataBufferdt, t) #timestamps
+    push!(dataBufferQ, Q) #flow rates
+    push!(dataBufferN, N) #total concentrations
+    push!(dataBufferCounts, psd) #raw bin counts
+    push!(dataBufferPSD, psd ./ Q ./ dlnD) #normalized size distribution (dN/dlogD) = (counts)/(flow rate * log bin width)
+end

@@ -1,0 +1,11 @@
+#!/bin/julia
+
+config_file = "gui/RDMA_1600x900_RockPro_TRek.glade"
+#= Include is used for combining files within a project
+Include evaluates contains of main.jl in the global scope of the
+current module, which includes the rest of the files in the
+project. =#
+include("main.jl") 
+#= wait suspends and frozen while Julia runs another task,
+once Godot is closed, the program will resume and exit. =#
+wait(Godot) 

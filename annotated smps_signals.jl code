@@ -50,6 +50,7 @@ function smps_signals()
         (smps_scan_state.value == "CLASSIFIER") && (myV = classifierV) #uses classifier voltage 
 
         return [classifierV, myV] # Returns array of both classifier and SMPS voltages
+	end
 
     # Determine cleanup procedure once scan is done
     function smps_scan_termination(s) #called when "DONE" is returned from state function

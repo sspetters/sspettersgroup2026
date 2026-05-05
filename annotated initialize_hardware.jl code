@@ -1,0 +1,35 @@
+#opens USB connection to both Labkjack devices (number argument is the USB device ID)
+HANDLE = openUSBConnection(1)     # Internal Labjack connected to Ultravolt
+HANDLE1 = openUSBConnection(3)    # External Labjack connected to blue rack
+
+#loads factory calibrarion constants for each unit(values unique to each device and used to convert raw reading to accurate voltages)
+caliInfo = getCalibrationInformation(HANDLE)    #calibration for Internal Labjack
+caliInfo1 = getCalibrationInformation(HANDLE1)  #calibration for External Labjack 
+
+#loads calibration for TickDAC accessorory board(plug in module that provides additional high-precision DAC output channels)
+caliInfoTdac1 = getTdacCalibrationInformation(HANDLE1, 0) # TickDAC on outside
+
+# Rack has 4 power supplies, two Ultravolt - LJ(1) and two Spellman - LJ(3)
+powerSupply1 = :Ultravolt   #high voltage supply 1(Ultravolt)
+powerSupply2 = :Ultravolt   #high voltage supply 2(Ultravolt)
+powerSupply3 = :Spellman    #high voltage supply 3(Spellman)
+powerSupply4 = :Spellman    #high voltage supply 4(Spellman)
+
+const dataBufferCPC1 = CircularBuffer{String}(10) #buffer storing last 10 CPC data strings
+
+#configures serial port connection to MAGIC CPC instrument on USB port 0 (MAGIC specifies the instrument type so the library knows correct data format)
+portCPC = CondensationParticleCounters.config(:MAGIC, "/dev/ttyUSB0")
+
+flowRate1 = 0.44 #CPC sample flow rate (L/min)
+
+# CPCType1, flowRate1, port1 = configure_serial_port(1)
+function start_acquisition_loops()
+    @async CondensationParticleCounters.stream(
+        portCPC,
+        :MAGIC,
+        "/home/aerosol/Data/magic/cpc",
+        dataBufferCPC1
+    )   
+end
+
+start_acquisition_loops()
